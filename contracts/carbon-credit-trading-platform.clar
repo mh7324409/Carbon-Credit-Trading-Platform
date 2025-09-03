@@ -8,6 +8,8 @@
 (define-constant err-credit-already-retired (err u106))
 (define-constant err-invalid-price (err u107))
 (define-constant err-cannot-buy-own-listing (err u108))
+(define-constant err-certificate-not-found (err u109))
+(define-constant err-invalid-certificate-data (err u110))
 
 (define-fungible-token carbon-credit)
 
@@ -53,9 +55,34 @@
     uint
 )
 
+(define-map offset-certificates
+    { certificate-id: uint }
+    {
+        issuer: principal,
+        entity: principal,
+        entity-name: (string-ascii 100),
+        credits-retired: uint,
+        project-ids: (list 10 uint),
+        purpose: (string-ascii 200),
+        timestamp: uint,
+        verified: bool,
+        certificate-hash: (buff 32)
+    }
+)
+
+(define-map entity-offset-totals
+    { entity: principal }
+    {
+        total-retired: uint,
+        certificate-count: uint,
+        verified-retired: uint
+    }
+)
+
 (define-data-var next-project-id uint u1)
 (define-data-var next-credit-id uint u1)
 (define-data-var next-listing-id uint u1)
+(define-data-var next-certificate-id uint u1)
 
 (define-read-only (get-contract-owner)
     contract-owner
@@ -91,6 +118,18 @@
 
 (define-read-only (get-next-listing-id)
     (var-get next-listing-id)
+)
+
+(define-read-only (get-offset-certificate (certificate-id uint))
+    (map-get? offset-certificates { certificate-id: certificate-id })
+)
+
+(define-read-only (get-entity-offset-totals (entity principal))
+    (map-get? entity-offset-totals { entity: entity })
+)
+
+(define-read-only (get-next-certificate-id)
+    (var-get next-certificate-id)
 )
 
 (define-public (register-project (name (string-ascii 100)) (description (string-ascii 500)) (location (string-ascii 100)) (methodology (string-ascii 100)))
@@ -207,12 +246,104 @@
                         )
                         (var-set next-credit-id (+ new-credit-id u1))
                         (ok true)
-                    )
-                )
-            )
-        )
-    )
-)
+                        )
+                        )
+                        )
+                        )
+                        )
+                        )
+ 
+ (define-public (register-carbon-offset (entity principal) (entity-name (string-ascii 100)) (credits-retired uint) (project-ids (list 10 uint)) (purpose (string-ascii 200)))
+     (begin
+         (asserts! (> credits-retired u0) err-invalid-amount)
+         (asserts! (> (len entity-name) u0) err-invalid-certificate-data)
+         (asserts! (> (len purpose) u0) err-invalid-certificate-data)
+         (let ((certificate-id (var-get next-certificate-id))
+               (certificate-hash (keccak256 (concat (concat (concat (unwrap-panic (to-consensus-buff? certificate-id)) (unwrap-panic (to-consensus-buff? entity))) (unwrap-panic (to-consensus-buff? credits-retired))) (unwrap-panic (to-consensus-buff? stacks-block-height))))))
+             (map-set offset-certificates
+                 { certificate-id: certificate-id }
+                 {
+                     issuer: tx-sender,
+                     entity: entity,
+                     entity-name: entity-name,
+                     credits-retired: credits-retired,
+                     project-ids: project-ids,
+                     purpose: purpose,
+                     timestamp: stacks-block-height,
+                     verified: false,
+                     certificate-hash: certificate-hash
+                 }
+             )
+             (let ((current-totals (default-to { total-retired: u0, certificate-count: u0, verified-retired: u0 } (map-get? entity-offset-totals { entity: entity }))))
+                 (map-set entity-offset-totals
+                     { entity: entity }
+                     {
+                         total-retired: (+ (get total-retired current-totals) credits-retired),
+                         certificate-count: (+ (get certificate-count current-totals) u1),
+                         verified-retired: (get verified-retired current-totals)
+                     }
+                 )
+                 (var-set next-certificate-id (+ certificate-id u1))
+                 (ok certificate-id)
+             )
+         )
+     )
+ )
+ 
+ (define-public (verify-offset-certificate (certificate-id uint))
+     (begin
+         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+         (asserts! (is-some (map-get? offset-certificates { certificate-id: certificate-id })) err-certificate-not-found)
+         (let ((certificate (unwrap-panic (map-get? offset-certificates { certificate-id: certificate-id }))))
+             (asserts! (not (get verified certificate)) err-invalid-certificate-data)
+             (let ((entity (get entity certificate))
+                   (credits-retired (get credits-retired certificate))
+                   (current-totals (default-to { total-retired: u0, certificate-count: u0, verified-retired: u0 } (map-get? entity-offset-totals { entity: entity }))))
+                 (map-set offset-certificates
+                     { certificate-id: certificate-id }
+                     (merge certificate { verified: true })
+                 )
+                 (map-set entity-offset-totals
+                     { entity: entity }
+                     (merge current-totals { verified-retired: (+ (get verified-retired current-totals) credits-retired) })
+                 )
+                 (ok true)
+             )
+         )
+     )
+ )
+ 
+ (define-public (update-offset-purpose (certificate-id uint) (new-purpose (string-ascii 200)))
+     (begin
+         (asserts! (is-some (map-get? offset-certificates { certificate-id: certificate-id })) err-certificate-not-found)
+         (let ((certificate (unwrap-panic (map-get? offset-certificates { certificate-id: certificate-id }))))
+             (asserts! (is-eq tx-sender (get issuer certificate)) err-not-token-owner)
+             (asserts! (not (get verified certificate)) err-invalid-certificate-data)
+             (asserts! (> (len new-purpose) u0) err-invalid-certificate-data)
+             (map-set offset-certificates
+                 { certificate-id: certificate-id }
+                 (merge certificate { purpose: new-purpose })
+             )
+             (ok true)
+         )
+     )
+ )
+ 
+ (define-read-only (verify-carbon-neutrality (entity principal) (required-credits uint))
+     (let ((totals (map-get? entity-offset-totals { entity: entity })))
+         (match totals
+             entity-totals (>= (get verified-retired entity-totals) required-credits)
+             false
+         )
+     )
+ )
+ 
+ (define-read-only (get-certificate-verification-hash (certificate-id uint))
+     (match (map-get? offset-certificates { certificate-id: certificate-id })
+         certificate (some (get certificate-hash certificate))
+         none
+     )
+ )
 
 (define-public (create-listing (credit-id uint) (amount uint) (price-per-credit uint))
     (begin

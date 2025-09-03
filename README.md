@@ -13,6 +13,9 @@ A decentralized platform for minting, trading, and retiring carbon credits on th
 - 🔥 **Credit Retirement** - Permanently retire credits for carbon offsetting
 - 📊 **Balance Tracking** - Track credits by project and user
 - 🔐 **Secure Transfers** - Safe and auditable credit transfers
+- 📋 **Carbon Offset Registry** - Generate verifiable certificates of carbon neutrality
+- ✅ **Certificate Verification** - Admin-verified offset certificates with tamper-proof hashes
+- 🌍 **Neutrality Verification** - Public verification of entity carbon neutrality claims
 
 ## 📋 Prerequisites
 
@@ -106,6 +109,39 @@ Cancel an active marketplace listing.
 (contract-call? .carbon-credit-trading-platform cancel-listing u1)
 ```
 
+### 📋 Carbon Offset Registry
+
+#### `register-carbon-offset`
+Register carbon credits retirement for offset certificate generation.
+```clarity
+(contract-call? .carbon-credit-trading-platform register-carbon-offset 
+  'SP2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKNRV9EJ7  ; entity
+  "ACME Corporation"                              ; entity-name
+  u500                                            ; credits-retired
+  (list u1 u2 u3)                               ; project-ids
+  "Q1 2024 carbon neutrality initiative")        ; purpose
+```
+
+#### `verify-offset-certificate` (Admin Only)
+Verify an offset certificate for official recognition.
+```clarity
+(contract-call? .carbon-credit-trading-platform verify-offset-certificate u1)
+```
+
+#### `update-offset-purpose`
+Update the purpose of an unverified certificate.
+```clarity
+(contract-call? .carbon-credit-trading-platform update-offset-purpose 
+  u1 "Updated carbon offset initiative for Q2 2024")
+```
+
+#### `verify-carbon-neutrality`
+Check if an entity has enough verified offsets for carbon neutrality.
+```clarity
+(contract-call? .carbon-credit-trading-platform verify-carbon-neutrality 
+  'SP2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKNRV9EJ7 u1000)
+```
+
 ### 📊 Read-Only Functions
 
 ```clarity
@@ -125,6 +161,16 @@ Cancel an active marketplace listing.
 ;; Get total carbon credit balance
 (contract-call? .carbon-credit-trading-platform get-carbon-credit-balance 
   'SP2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKNRV9EJ7)
+
+;; Get offset certificate details
+(contract-call? .carbon-credit-trading-platform get-offset-certificate u1)
+
+;; Get entity offset totals
+(contract-call? .carbon-credit-trading-platform get-entity-offset-totals 
+  'SP2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKNRV9EJ7)
+
+;; Get certificate verification hash
+(contract-call? .carbon-credit-trading-platform get-certificate-verification-hash u1)
 ```
 
 ## 🎮 Usage Example
@@ -156,6 +202,17 @@ Here's a complete workflow from project registration to credit retirement:
 ;; 6. 🔥 Retire credits for offsetting
 (contract-call? .carbon-credit-trading-platform retire-credits 
   u1 u100 "Company carbon neutral initiative")
+
+;; 7. 📋 Register carbon offset certificate
+(contract-call? .carbon-credit-trading-platform register-carbon-offset
+  tx-sender "My Company" u100 (list u1) "2024 carbon neutrality")
+
+;; 8. ✅ Verify certificate (admin only)
+(contract-call? .carbon-credit-trading-platform verify-offset-certificate u1)
+
+;; 9. 🌍 Check carbon neutrality status
+(contract-call? .carbon-credit-trading-platform verify-carbon-neutrality 
+  tx-sender u100)
 ```
 
 ## ⚠️ Error Codes
@@ -171,6 +228,8 @@ Here's a complete workflow from project registration to credit retirement:
 | u106 | `err-credit-already-retired` | Credits already permanently retired |
 | u107 | `err-invalid-price` | Price must be greater than 0 |
 | u108 | `err-cannot-buy-own-listing` | Cannot purchase your own listing |
+| u109 | `err-certificate-not-found` | Offset certificate doesn't exist |
+| u110 | `err-invalid-certificate-data` | Invalid certificate data or already verified |
 
 ## 🧪 Testing
 
