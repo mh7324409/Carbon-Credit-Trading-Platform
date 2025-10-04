@@ -16,6 +16,9 @@ A decentralized platform for minting, trading, and retiring carbon credits on th
 - 📋 **Carbon Offset Registry** - Generate verifiable certificates of carbon neutrality
 - ✅ **Certificate Verification** - Admin-verified offset certificates with tamper-proof hashes
 - 🌍 **Neutrality Verification** - Public verification of entity carbon neutrality claims
+- 🔄 **Credit Leasing** - Temporary credit transfers with automatic returns for compliance periods
+- ⏱️ **Time-based Rentals** - Lease credits with defined durations and automated expiry tracking
+- 💰 **Passive Income** - Credit owners earn revenue while maintaining long-term ownership
 
 ## 📋 Prerequisites
 
@@ -142,6 +145,42 @@ Check if an entity has enough verified offsets for carbon neutrality.
   'SP2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKNRV9EJ7 u1000)
 ```
 
+### 🔄 Credit Leasing System
+
+#### `create-lease-listing`
+List credits for temporary lease with defined duration.
+```clarity
+(contract-call? .carbon-credit-trading-platform create-lease-listing 
+  u1        ; credit-id
+  u100      ; amount
+  u500000   ; lease-price in microSTX
+  u1440)    ; lease-duration in blocks (~10 days)
+```
+
+#### `lease-credits`
+Lease credits from an active listing for temporary use.
+```clarity
+(contract-call? .carbon-credit-trading-platform lease-credits u1)
+```
+
+#### `return-leased-credits`
+Return leased credits after lease expiration.
+```clarity
+(contract-call? .carbon-credit-trading-platform return-leased-credits u1)
+```
+
+#### `cancel-lease-listing`
+Cancel an active lease listing before it's leased.
+```clarity
+(contract-call? .carbon-credit-trading-platform cancel-lease-listing u1)
+```
+
+#### `check-lease-expired`
+Check if a lease has expired and credits can be returned.
+```clarity
+(contract-call? .carbon-credit-trading-platform check-lease-expired u1)
+```
+
 ### 📊 Read-Only Functions
 
 ```clarity
@@ -171,6 +210,12 @@ Check if an entity has enough verified offsets for carbon neutrality.
 
 ;; Get certificate verification hash
 (contract-call? .carbon-credit-trading-platform get-certificate-verification-hash u1)
+
+;; Get lease listing details
+(contract-call? .carbon-credit-trading-platform get-lease-listing u1)
+
+;; Get active lease information
+(contract-call? .carbon-credit-trading-platform get-active-lease u1)
 ```
 
 ## 🎮 Usage Example
@@ -213,6 +258,16 @@ Here's a complete workflow from project registration to credit retirement:
 ;; 9. 🌍 Check carbon neutrality status
 (contract-call? .carbon-credit-trading-platform verify-carbon-neutrality 
   tx-sender u100)
+
+;; 10. 🔄 Create a lease listing
+(contract-call? .carbon-credit-trading-platform create-lease-listing
+  u1 u50 u300000 u720)
+
+;; 11. ⏱️ Lease credits temporarily
+(contract-call? .carbon-credit-trading-platform lease-credits u1)
+
+;; 12. 💰 Return leased credits after expiry
+(contract-call? .carbon-credit-trading-platform return-leased-credits u1)
 ```
 
 ## ⚠️ Error Codes
@@ -230,6 +285,11 @@ Here's a complete workflow from project registration to credit retirement:
 | u108 | `err-cannot-buy-own-listing` | Cannot purchase your own listing |
 | u109 | `err-certificate-not-found` | Offset certificate doesn't exist |
 | u110 | `err-invalid-certificate-data` | Invalid certificate data or already verified |
+| u111 | `err-lease-not-found` | Lease listing doesn't exist |
+| u112 | `err-lease-not-expired` | Lease period hasn't ended yet |
+| u113 | `err-lease-already-active` | Credits already leased |
+| u114 | `err-invalid-lease-duration` | Lease duration must be greater than 0 |
+| u115 | `err-cannot-lease-own-credits` | Cannot lease your own credits |
 
 ## 🧪 Testing
 

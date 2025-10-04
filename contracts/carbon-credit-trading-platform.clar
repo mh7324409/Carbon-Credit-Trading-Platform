@@ -10,6 +10,11 @@
 (define-constant err-cannot-buy-own-listing (err u108))
 (define-constant err-certificate-not-found (err u109))
 (define-constant err-invalid-certificate-data (err u110))
+(define-constant err-lease-not-found (err u111))
+(define-constant err-lease-not-expired (err u112))
+(define-constant err-lease-already-active (err u113))
+(define-constant err-invalid-lease-duration (err u114))
+(define-constant err-cannot-lease-own-credits (err u115))
 
 (define-fungible-token carbon-credit)
 
@@ -79,10 +84,36 @@
     }
 )
 
+(define-map lease-listings
+    { lease-id: uint }
+    {
+        lessor: principal,
+        credit-id: uint,
+        amount: uint,
+        lease-price: uint,
+        lease-duration: uint,
+        active: bool
+    }
+)
+
+(define-map active-leases
+    { lease-id: uint }
+    {
+        lessor: principal,
+        lessee: principal,
+        credit-id: uint,
+        amount: uint,
+        start-block: uint,
+        end-block: uint,
+        returned: bool
+    }
+)
+
 (define-data-var next-project-id uint u1)
 (define-data-var next-credit-id uint u1)
 (define-data-var next-listing-id uint u1)
 (define-data-var next-certificate-id uint u1)
+(define-data-var next-lease-id uint u1)
 
 (define-read-only (get-contract-owner)
     contract-owner
@@ -130,6 +161,25 @@
 
 (define-read-only (get-next-certificate-id)
     (var-get next-certificate-id)
+)
+
+(define-read-only (get-lease-listing (lease-id uint))
+    (map-get? lease-listings { lease-id: lease-id })
+)
+
+(define-read-only (get-active-lease (lease-id uint))
+    (map-get? active-leases { lease-id: lease-id })
+)
+
+(define-read-only (get-next-lease-id)
+    (var-get next-lease-id)
+)
+
+(define-read-only (check-lease-expired (lease-id uint))
+    (match (map-get? active-leases { lease-id: lease-id })
+        lease (>= stacks-block-height (get end-block lease))
+        false
+    )
 )
 
 (define-public (register-project (name (string-ascii 100)) (description (string-ascii 500)) (location (string-ascii 100)) (methodology (string-ascii 100)))
@@ -344,6 +394,141 @@
          none
      )
  )
+
+(define-public (create-lease-listing (credit-id uint) (amount uint) (lease-price uint) (lease-duration uint))
+    (begin
+        (asserts! (is-some (map-get? credit-details { credit-id: credit-id })) err-listing-not-found)
+        (asserts! (> lease-duration u0) err-invalid-lease-duration)
+        (let ((credit (unwrap-panic (map-get? credit-details { credit-id: credit-id }))))
+            (asserts! (is-eq tx-sender (get owner credit)) err-not-token-owner)
+            (asserts! (not (get retired credit)) err-credit-already-retired)
+            (asserts! (<= amount (get amount credit)) err-insufficient-balance)
+            (asserts! (> lease-price u0) err-invalid-price)
+            (asserts! (> amount u0) err-invalid-amount)
+            (let ((lease-id (var-get next-lease-id)))
+                (map-set lease-listings
+                    { lease-id: lease-id }
+                    {
+                        lessor: tx-sender,
+                        credit-id: credit-id,
+                        amount: amount,
+                        lease-price: lease-price,
+                        lease-duration: lease-duration,
+                        active: true
+                    }
+                )
+                (var-set next-lease-id (+ lease-id u1))
+                (ok lease-id)
+            )
+        )
+    )
+)
+
+(define-public (lease-credits (lease-id uint))
+    (begin
+        (asserts! (is-some (map-get? lease-listings { lease-id: lease-id })) err-lease-not-found)
+        (asserts! (is-none (map-get? active-leases { lease-id: lease-id })) err-lease-already-active)
+        (let ((listing (unwrap-panic (map-get? lease-listings { lease-id: lease-id }))))
+            (asserts! (get active listing) err-lease-not-found)
+            (asserts! (not (is-eq tx-sender (get lessor listing))) err-cannot-lease-own-credits)
+            (let ((lessor (get lessor listing))
+                  (credit-id (get credit-id listing))
+                  (amount (get amount listing))
+                  (lease-price (get lease-price listing))
+                  (lease-duration (get lease-duration listing)))
+                (asserts! (is-some (map-get? credit-details { credit-id: credit-id })) err-listing-not-found)
+                (let ((credit (unwrap-panic (map-get? credit-details { credit-id: credit-id }))))
+                    (asserts! (is-eq lessor (get owner credit)) err-not-token-owner)
+                    (asserts! (not (get retired credit)) err-credit-already-retired)
+                    (asserts! (<= amount (get amount credit)) err-insufficient-balance)
+                    (try! (stx-transfer? lease-price tx-sender lessor))
+                    (try! (ft-transfer? carbon-credit amount lessor tx-sender))
+                    (let ((project-id (get project-id credit))
+                          (lessor-balance (get-user-balance lessor project-id))
+                          (lessee-balance (get-user-balance tx-sender project-id)))
+                        (map-set user-balances
+                            { user: lessor, project-id: project-id }
+                            (- lessor-balance amount)
+                        )
+                        (map-set user-balances
+                            { user: tx-sender, project-id: project-id }
+                            (+ lessee-balance amount)
+                        )
+                        (map-set active-leases
+                            { lease-id: lease-id }
+                            {
+                                lessor: lessor,
+                                lessee: tx-sender,
+                                credit-id: credit-id,
+                                amount: amount,
+                                start-block: stacks-block-height,
+                                end-block: (+ stacks-block-height lease-duration),
+                                returned: false
+                            }
+                        )
+                        (map-set lease-listings
+                            { lease-id: lease-id }
+                            (merge listing { active: false })
+                        )
+                        (ok true)
+                    )
+                )
+            )
+        )
+    )
+)
+
+(define-public (return-leased-credits (lease-id uint))
+    (begin
+        (asserts! (is-some (map-get? active-leases { lease-id: lease-id })) err-lease-not-found)
+        (let ((lease (unwrap-panic (map-get? active-leases { lease-id: lease-id }))))
+            (asserts! (not (get returned lease)) err-invalid-amount)
+            (asserts! (>= stacks-block-height (get end-block lease)) err-lease-not-expired)
+            (let ((lessor (get lessor lease))
+                  (lessee (get lessee lease))
+                  (credit-id (get credit-id lease))
+                  (amount (get amount lease)))
+                (asserts! (is-some (map-get? credit-details { credit-id: credit-id })) err-listing-not-found)
+                (let ((credit (unwrap-panic (map-get? credit-details { credit-id: credit-id }))))
+                    (try! (ft-transfer? carbon-credit amount lessee lessor))
+                    (let ((project-id (get project-id credit))
+                          (lessor-balance (get-user-balance lessor project-id))
+                          (lessee-balance (get-user-balance lessee project-id)))
+                        (map-set user-balances
+                            { user: lessee, project-id: project-id }
+                            (- lessee-balance amount)
+                        )
+                        (map-set user-balances
+                            { user: lessor, project-id: project-id }
+                            (+ lessor-balance amount)
+                        )
+                        (map-set active-leases
+                            { lease-id: lease-id }
+                            (merge lease { returned: true })
+                        )
+                        (ok true)
+                    )
+                )
+            )
+        )
+    )
+)
+
+(define-public (cancel-lease-listing (lease-id uint))
+    (begin
+        (asserts! (is-some (map-get? lease-listings { lease-id: lease-id })) err-lease-not-found)
+        (asserts! (is-none (map-get? active-leases { lease-id: lease-id })) err-lease-already-active)
+        (let ((listing (unwrap-panic (map-get? lease-listings { lease-id: lease-id }))))
+            (asserts! (is-eq tx-sender (get lessor listing)) err-not-token-owner)
+            (asserts! (get active listing) err-lease-not-found)
+            (map-set lease-listings
+                { lease-id: lease-id }
+                (merge listing { active: false })
+            )
+            (ok true)
+        )
+    )
+)
 
 (define-public (create-listing (credit-id uint) (amount uint) (price-per-credit uint))
     (begin
