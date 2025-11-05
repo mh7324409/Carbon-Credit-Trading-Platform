@@ -695,3 +695,65 @@
         )
     )
 )
+
+(define-constant err-project-not-found (err u116))
+(define-constant err-invalid-rating (err u117))
+
+(define-map project-ratings
+    { project-id: uint, rater: principal }
+    { score: uint }
+)
+
+(define-map project-rating-stats
+    { project-id: uint }
+    { total-score: uint, rating-count: uint }
+)
+
+(define-read-only (get-project-rating (project-id uint) (rater principal))
+    (map-get? project-ratings { project-id: project-id, rater: rater })
+)
+
+(define-read-only (get-project-rating-stats (project-id uint))
+    (map-get? project-rating-stats { project-id: project-id })
+)
+
+(define-read-only (get-project-average-rating (project-id uint))
+    (let ((stats (map-get? project-rating-stats { project-id: project-id })))
+        (match stats
+            data (if (> (get rating-count data) u0) (/ (get total-score data) (get rating-count data)) u0)
+            u0
+        )
+    )
+)
+
+(define-public (rate-project (project-id uint) (score uint))
+    (begin
+        (asserts! (is-some (map-get? projects { project-id: project-id })) err-project-not-found)
+        (let ((project (unwrap-panic (map-get? projects { project-id: project-id }))))
+            (asserts! (get verified project) err-project-not-verified)
+            (asserts! (and (>= score u1) (<= score u5)) err-invalid-rating)
+            (let ((existing (map-get? project-ratings { project-id: project-id, rater: tx-sender }))
+                  (stats (default-to { total-score: u0, rating-count: u0 } (map-get? project-rating-stats { project-id: project-id }))))
+                (match existing
+                    current
+                        (begin
+                            (map-set project-ratings { project-id: project-id, rater: tx-sender } { score: score })
+                            (map-set project-rating-stats
+                                { project-id: project-id }
+                                { total-score: (+ (- (get total-score stats) (get score current)) score), rating-count: (get rating-count stats) }
+                            )
+                            (ok true)
+                        )
+                    (begin
+                        (map-set project-ratings { project-id: project-id, rater: tx-sender } { score: score })
+                        (map-set project-rating-stats
+                            { project-id: project-id }
+                            { total-score: (+ (get total-score stats) score), rating-count: (+ (get rating-count stats) u1) }
+                        )
+                        (ok true)
+                    )
+                )
+            )
+        )
+    )
+)
