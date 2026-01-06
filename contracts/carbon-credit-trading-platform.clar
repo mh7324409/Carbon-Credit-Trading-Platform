@@ -757,3 +757,86 @@
         )
     )
 )
+
+(define-constant err-insufficient-allowance (err u118))
+
+(define-map credit-allowances
+    { owner: principal, spender: principal, credit-id: uint }
+    uint
+)
+
+(define-read-only (get-credit-allowance (owner principal) (spender principal) (credit-id uint))
+    (default-to u0 (map-get? credit-allowances { owner: owner, spender: spender, credit-id: credit-id }))
+)
+
+(define-public (approve-credit-spender (spender principal) (credit-id uint) (amount uint))
+    (begin
+        (asserts! (is-some (map-get? credit-details { credit-id: credit-id })) err-listing-not-found)
+        (let ((credit (unwrap-panic (map-get? credit-details { credit-id: credit-id }))))
+            (asserts! (is-eq tx-sender (get owner credit)) err-not-token-owner)
+            (asserts! (not (get retired credit)) err-credit-already-retired)
+            (asserts! (<= amount (get amount credit)) err-invalid-amount)
+            (map-set credit-allowances
+                { owner: tx-sender, spender: spender, credit-id: credit-id }
+                amount
+            )
+            (ok true)
+        )
+    )
+)
+
+(define-public (transfer-credits-from (owner principal) (recipient principal) (amount uint) (credit-id uint))
+    (begin
+        (asserts! (is-some (map-get? credit-details { credit-id: credit-id })) err-listing-not-found)
+        (let ((credit (unwrap-panic (map-get? credit-details { credit-id: credit-id }))))
+            (asserts! (is-eq owner (get owner credit)) err-not-token-owner)
+            (asserts! (not (get retired credit)) err-credit-already-retired)
+            (asserts! (<= amount (get amount credit)) err-insufficient-balance)
+            (asserts! (>= (ft-get-balance carbon-credit owner) amount) err-insufficient-balance)
+            (let ((allowance (get-credit-allowance owner tx-sender credit-id)))
+                (asserts! (>= allowance amount) err-insufficient-allowance)
+                (try! (ft-transfer? carbon-credit amount owner recipient))
+                (let ((project-id (get project-id credit))
+                      (owner-balance (get-user-balance owner project-id))
+                      (recipient-balance (get-user-balance recipient project-id)))
+                    (map-set user-balances
+                        { user: owner, project-id: project-id }
+                        (- owner-balance amount)
+                    )
+                    (map-set user-balances
+                        { user: recipient, project-id: project-id }
+                        (+ recipient-balance amount)
+                    )
+                    (map-set credit-allowances
+                        { owner: owner, spender: tx-sender, credit-id: credit-id }
+                        (- allowance amount)
+                    )
+                    (if (is-eq amount (get amount credit))
+                        (begin
+                            (map-set credit-details
+                                { credit-id: credit-id }
+                                (merge credit { owner: recipient })
+                            )
+                            (ok true)
+                        )
+                        (let ((new-credit-id (var-get next-credit-id)))
+                            (map-set credit-details
+                                { credit-id: credit-id }
+                                (merge credit { amount: (- (get amount credit) amount) })
+                            )
+                            (map-set credit-details
+                                { credit-id: new-credit-id }
+                                (merge credit { 
+                                    owner: recipient,
+                                    amount: amount
+                                })
+                            )
+                            (var-set next-credit-id (+ new-credit-id u1))
+                            (ok true)
+                        )
+                    )
+                )
+            )
+        )
+    )
+)
